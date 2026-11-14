@@ -37,6 +37,7 @@ long sys_connect_nocancel(int fd, const void* name, int socklen)
 	if (ret < 0)
 		return ret;
 
+#if defined(__aarch64__)
 	// DARLING workaround: Darwin clients on Darling-arm64 often set
 	// O_NONBLOCK on the socket and then wait for connect completion via
 	// Mach kqueue paths that Darling's kqueue plumbing doesn't yet wire
@@ -60,6 +61,16 @@ long sys_connect_nocancel(int fd, const void* name, int socklen)
 	if (was_nonblock) {
 		LINUX_SYSCALL(__NR_fcntl, fd, 4 /*F_SETFL*/, flags);  // restore O_NONBLOCK
 	}
+#else
+	// x86_64: kqueue reports socket readiness, so a non-blocking connect stays
+	// non-blocking (EINPROGRESS) as on macOS. Blocking here would stall a whole
+	// event loop for the TCP timeout (~130 s) on every unreachable peer.
+#ifdef __NR_socketcall
+	ret = LINUX_SYSCALL(__NR_socketcall, LINUX_SYS_CONNECT, ((long[6]) { fd, fixed, socklen }));
+#else
+	ret = LINUX_SYSCALL(__NR_connect, fd, fixed, socklen);
+#endif
+#endif
 
 	if (ret < 0)
 		ret = errno_linux_to_bsd(ret);
